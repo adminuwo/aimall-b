@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const mongoose = require('mongoose');
+const path     = require('path');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -177,6 +178,18 @@ app.delete('/api/admin/partner/:id', adminAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+// ── Static Path Management (Production) ──
+if (process.env.NODE_ENV === 'production' || true) { // Force for now to ensure visibility on Cloud Run
+    const distPath = path.join(__dirname, '../frontend/dist');
+    app.use(express.static(distPath));
+    
+    // Catch-all to serve index.html for SPA routing
+    app.get('*', (req, res, next) => {
+        if (req.path.startsWith('/api')) return next();
+        res.sendFile(path.join(distPath, 'index.html'));
+    });
+}
 
 // ── Start ──
 app.listen(PORT, () => {
