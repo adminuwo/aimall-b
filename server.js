@@ -1,16 +1,22 @@
+require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const mongoose = require('mongoose');
 
 const app  = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // ── Middleware ──
 app.use(cors());
 app.use(express.json());
 
 // ── MongoDB Connection ──
-const MONGO_URI = "mongodb+srv://Ai-mall:ai-mall%40123@cluster1.gx6fvat.mongodb.net/ai-mall?retryWrites=true&w=majority&appName=Cluster1";
+const MONGO_URI = process.env.MONGO_URI;
+
+if (!MONGO_URI) {
+    console.error('❌ MONGO_URI is missing from .env!');
+    process.exit(1);
+}
 
 mongoose.connect(MONGO_URI)
     .then(() => console.log('✅ MongoDB Connected Successfuly'))
@@ -43,7 +49,7 @@ const Contact = mongoose.model('Contact', ContactSchema);
 const Partner = mongoose.model('Partner', PartnerSchema);
 
 // ── Auth Middleware ──
-const ADMIN_KEY = 'aimall-admin-2026'; // Keep the existing key for simplicity
+const ADMIN_KEY = process.env.ADMIN_KEY || 'aimall-admin-2026'; 
 function adminAuth(req, res, next) {
     const key = req.headers['x-admin-key'] || req.query.key;
     if (key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
