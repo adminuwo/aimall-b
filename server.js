@@ -180,8 +180,12 @@ app.delete('/api/admin/partner/:id', adminAuth, async (req, res) => {
 });
 
 // ── Static Path Management (Production) ──
-if (process.env.NODE_ENV === 'production' || true) { // Force for now to ensure visibility on Cloud Run
-    const distPath = path.join(__dirname, '../frontend/dist');
+const fs = require('fs');
+const distPath = path.join(__dirname, '../frontend/dist');
+
+// Only serve static files if the frontend build exists (useful for single-container deployment)
+if (fs.existsSync(distPath)) {
+    console.log('📦 Serving compiled frontend from:', distPath);
     app.use(express.static(distPath));
     
     // Catch-all to serve index.html for SPA routing
