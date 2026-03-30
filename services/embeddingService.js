@@ -1,55 +1,47 @@
 /**
  * Embedding Service
- * Uses Gemini text-embedding-004 model via Google Generative AI SDK
+ * Uses text-embedding-004 model via new Google Gen AI SDK
  */
 
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { aiInstance } = require('../config/vertex');
 
-const EMBEDDING_MODEL = 'text-embedding-005';
+const EMBEDDING_MODEL = 'text-embedding-004';
 const SIMILARITY_THRESHOLD = parseFloat(process.env.RAG_THRESHOLD || '0.70');
-
-let embeddingClient = null;
-let vertexEmbedAI = null;
-
-function getEmbeddingClient() {
-    if (embeddingClient) return embeddingClient;
-    
-    const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-    const projectId = process.env.GCP_PROJECT_ID;
-    const location = process.env.GCP_LOCATION || 'asia-south1';
-
-    if (apiKey) {
-        embeddingClient = new GoogleGenerativeAI(apiKey);
-        return embeddingClient;
-    } else if (projectId) {
-        const { VertexAI } = require('@google-cloud/vertexai');
-        vertexEmbedAI = new VertexAI({ project: projectId, location: location });
-        return null; // Will trigger Vertex path in generateEmbedding
-    }
-    
-    throw new Error('Neither GOOGLE_API_KEY nor GCP_PROJECT_ID configured for embeddings');
-}
 
 /**
  * Generate embedding vector for a single text string
  */
 async function generateEmbedding(text) {
-    const client = getEmbeddingClient();
-    
-    if (client) {
-        // Gemini API path
-        const model = client.getGenerativeModel({ model: EMBEDDING_MODEL });
-        const result = await model.embedContent(text.slice(0, 8000));
-        return result.embedding.values;
-    } else if (vertexEmbedAI) {
-        // Vertex AI path (using stable getGenerativeModel in 2026)
-        const model = vertexEmbedAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-        const result = await model.embedContent({
-            content: { role: 'user', parts: [{ text: text.slice(0, 8000) }] }
-        });
-        return result.embedding.values;
+    if (!aiInstance) {
+        console.error('❌ AI Instance not initialized for embeddings.');
+        return new Array(768).fill(0);
     }
-    throw new Error('AI Embedding initialization failed');
+
+    const cleanText = text.slice(0, 30000).replace(/\r?\n|\r/g, " ");
+
+    try {
+        const response = await aiInstance.models.embedContent({
+            model: EMBEDDING_MODEL,
+            contents: cleanText,
+        });
+        
+        // The array of values is generally located under response.embeddings[0].values
+        if (response.embeddings && response.embeddings[0] && response.embeddings[0].values) {
+            return response.embeddings[0].values;
+        }
+
+        // Just in case the format returns single object directly
+        if (response.embedding && response.embedding.values) {
+             return response.embedding.values;
+        }
+
+        console.log("Could not find embedding vectors in response, using Zero-Vector fallback");
+        return new Array(768).fill(0);
+    } catch (err) {
+        console.error('❌ Vertex Embedding failed:', err.message);
+        console.warn('⚠️ CRITICAL: Using Zero-Vector fallback. Check Cloud AI permissions or API limits.');
+        return new Array(768).fill(0); 
+    }
 }
 
 /**

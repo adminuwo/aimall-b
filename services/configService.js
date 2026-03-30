@@ -1,7 +1,7 @@
 const BRAND = require('../utils/brandIdentity.js');
 
 const getFullSystemInstruction = () => {
-  return `${BRAND.BRAND_SYSTEM_RULES}\n\n${BRAND.AISA_CONVERSATIONAL_RULES}`;
+  return `${BRAND.BRAND_SYSTEM_RULES}\n\n${BRAND.BOT_CONVERSATIONAL_RULES}`;
 };
 
 const getConfig = () => {

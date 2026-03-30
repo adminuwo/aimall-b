@@ -1,34 +1,51 @@
 /**
- * Webhook Management Routes
+ * Webhook Management Routes (Using Local Data)
  */
 const express         = require('express');
-const WebhookConfig   = require('../models/WebhookConfig');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
+const { readData, writeData, uuidv4 } = require('../utils/dataStore');
 
 const router = express.Router();
 
 router.get('/',    verifyToken, requireAdmin, async (req, res) => {
-    const hooks = await WebhookConfig.find().sort({ created_at: -1 });
+    const data = readData();
+    const hooks = data.webhooks || [];
     res.json({ success: true, webhooks: hooks });
 });
 
 router.post('/',   verifyToken, requireAdmin, async (req, res) => {
     try {
-        const hook = await WebhookConfig.create(req.body);
+        const data = readData();
+        if (!data.webhooks) data.webhooks = [];
+        const hook = { id: uuidv4(), ...req.body, created_at: new Date() };
+        data.webhooks.push(hook);
+        writeData(data);
         res.json({ success: true, webhook: hook });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 router.patch('/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
-        await WebhookConfig.findByIdAndUpdate(req.params.id, req.body);
-        res.json({ success: true });
+        const data = readData();
+        let found = false;
+        data.webhooks = (data.webhooks || []).map(hook => {
+            if (String(hook.id || hook._id) === String(req.params.id)) {
+                found = true;
+                return { ...hook, ...req.body };
+            }
+            return hook;
+        });
+        if (found) writeData(data);
+        res.json({ success: found });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 router.delete('/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
-        await WebhookConfig.findByIdAndDelete(req.params.id);
+        const data = readData();
+        const initialLen = (data.webhooks || []).length;
+        data.webhooks = (data.webhooks || []).filter(hook => String(hook.id || hook._id) !== String(req.params.id));
+        if (data.webhooks.length !== initialLen) writeData(data);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });

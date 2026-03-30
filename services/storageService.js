@@ -34,18 +34,22 @@ async function storeFile(localPath, filename) {
             const storage = getGCSClient();
             const bucket  = storage.bucket(BUCKET);
             const destPath = `documents/${Date.now()}_${filename}`;
+            
+            console.log(`📤  Uploading to bucket: ${BUCKET}...`);
             await bucket.upload(localPath, {
                 destination: destPath,
-                metadata: { cacheControl: 'private' }
+                resumable: false,
+                metadata: { cacheControl: 'public, max-age=31536000' }
             });
-            const [url] = await bucket.file(destPath).getSignedUrl({
-                action:  'read',
-                expires: Date.now() + 7 * 24 * 60 * 60 * 1000  // 7 days
-            });
-            console.log(`☁️  GCS upload: ${destPath}`);
+
+            // Get Public URL (Signed URLs require a service account JSON, standard ADC doesn't support them)
+            const url = `https://storage.googleapis.com/${BUCKET}/${destPath}`;
+
+            console.log(`✅  Bucket upload successful: ${destPath}`);
             return { url, storageType: 'gcs' };
         } catch (e) {
-            console.warn(`⚠️  GCS upload failed (${e.message}), using local storage`);
+            console.error(`❌  CRITICAL: GCS Bucket upload failed:`, e.message);
+            throw new Error(`Cloud Storage Error: ${e.message}`);
         }
     }
 

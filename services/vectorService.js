@@ -57,7 +57,11 @@ async function deleteVectors(documentId, chunkCount) {
     // MongoDB: deletion is handled by deleting the Document itself
 }
 
-// ── Query similar chunks ──────────────────────────────────────────────────────
+// ── Using local JSON for now for data ──
+const fs = require('fs');
+const path = require('path');
+const DATA_PATH = path.join(__dirname, '../knowledge.json');
+
 async function querySimilar(queryEmbedding, topK = TOP_K) {
     const idx = await getPineconeIndex();
 
@@ -76,27 +80,35 @@ async function querySimilar(queryEmbedding, topK = TOP_K) {
         }));
     }
 
-    // ── MongoDB cosine similarity fallback ──
-    const docs = await Document.find({ status: 'processed' }).select('_id originalName chunks');
-    const scored = [];
+    // ── JSON fallback — no MongoDB needed ──
+    try {
+        if (!fs.existsSync(DATA_PATH)) return [];
+        const content = fs.readFileSync(DATA_PATH, 'utf8');
+        const data = JSON.parse(content);
+        const docs = data.documents || [];
+        const scored = [];
 
-    for (const doc of docs) {
-        for (const chunk of doc.chunks) {
-            if (!chunk.embedding || chunk.embedding.length === 0) continue;
-            const score = cosineSimilarity(queryEmbedding, chunk.embedding);
-            scored.push({
-                content:         chunk.content,
-                documentId:      doc._id.toString(),
-                documentName:    doc.originalName,
-                chunkIndex:      chunk.index,
-                similarityScore: score
-            });
+        for (const doc of docs) {
+            if (!doc.chunks || !Array.isArray(doc.chunks)) continue;
+            for (const chunk of doc.chunks) {
+                if (!chunk.embedding || chunk.embedding.length === 0) continue;
+                const score = cosineSimilarity(queryEmbedding, chunk.embedding);
+                scored.push({
+                    content:         chunk.content,
+                    documentId:      doc.id || doc._id,
+                    documentName:    doc.name || doc.originalName,
+                    chunkIndex:      chunk.index,
+                    similarityScore: score
+                });
+            }
         }
+        return scored
+            .sort((a, b) => b.similarityScore - a.similarityScore)
+            .slice(0, topK);
+    } catch (err) {
+        console.error('❌ JSON RAG error:', err.message);
+        return [];
     }
-
-    return scored
-        .sort((a, b) => b.similarityScore - a.similarityScore)
-        .slice(0, topK);
 }
 
 // ── Re-rank results (cross-encoder style keyword boost) ──────────────────────

@@ -4,8 +4,17 @@
 const express   = require('express');
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
-const AdminUser = require('../models/AdminUser');
+const fs = require('fs');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 const { verifyToken, requireAdmin, JWT_SECRET } = require('../middleware/auth');
+
+const DATA_PATH = path.join(__dirname, '../data.json');
+const readData = () => {
+    try { return JSON.parse(fs.readFileSync(DATA_PATH, 'utf8')); }
+    catch (e) { return { users: [] }; }
+};
+const writeData = (data) => fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
 
 const router = express.Router();
 
@@ -15,27 +24,32 @@ router.post('/login', async (req, res) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ success: false, error: 'Username and password required' });
 
+        const data = readData();
+        if (!data.users) data.users = [];
+
         // Seed default admin if none exists
-        const count = await AdminUser.countDocuments();
-        if (count === 0) {
+        if (data.users.length === 0) {
             const hashed = await bcrypt.hash('admin123', 10);
-            await AdminUser.create({ username: 'admin', email: 'admin@aimall.ai', password: hashed, role: 'admin' });
+            data.users.push({ id: uuidv4(), username: 'admin', email: 'admin@aimall.ai', password: hashed, role: 'admin', isActive: true });
+            writeData(data);
             console.log('🔐 Default admin created: admin / admin123');
         }
 
-        const user = await AdminUser.findOne({ username, isActive: true });
+        const user = data.users.find(u => u.username === username && u.isActive !== false);
         if (!user) return res.status(401).json({ success: false, error: 'Invalid credentials' });
 
         const valid = await bcrypt.compare(password, user.password);
         if (!valid) return res.status(401).json({ success: false, error: 'Invalid credentials' });
 
         const token = jwt.sign(
-            { userId: user._id, username: user.username, role: user.role },
+            { userId: user.id || user._id, username: user.username, role: user.role },
             JWT_SECRET,
             { expiresIn: '24h' }
         );
 
-        await user.updateOne({ lastLogin: new Date() });
+        user.lastLogin = new Date().toISOString();
+        writeData(data);
+
         res.json({ success: true, token, user: { username: user.username, role: user.role, email: user.email } });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -48,11 +62,20 @@ router.post('/register', verifyToken, requireAdmin, async (req, res) => {
         const { username, email, password, role } = req.body;
         if (!username || !email || !password) return res.status(400).json({ success: false, error: 'All fields required' });
 
+        const data = readData();
+        if (!data.users) data.users = [];
+
+        if (data.users.find(u => u.username === username || u.email === email)) {
+            return res.status(409).json({ success: false, error: 'Username or email already exists' });
+        }
+
         const hashed = await bcrypt.hash(password, 10);
-        const user   = await AdminUser.create({ username, email, password: hashed, role: role || 'viewer' });
-        res.json({ success: true, user: { id: user._id, username: user.username, role: user.role } });
+        const user = { id: uuidv4(), username, email, password: hashed, role: role || 'viewer', isActive: true };
+        data.users.push(user);
+        writeData(data);
+
+        res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
     } catch (err) {
-        if (err.code === 11000) return res.status(409).json({ success: false, error: 'Username or email already exists' });
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -60,9 +83,11 @@ router.post('/register', verifyToken, requireAdmin, async (req, res) => {
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 router.get('/me', verifyToken, async (req, res) => {
     try {
-        const user = await AdminUser.findById(req.user.userId).select('-password');
+        const data = readData();
+        const user = (data.users || []).find(u => String(u.id || u._id) === String(req.user.userId));
         if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-        res.json({ success: true, user });
+        const { password, ...userWithoutPassword } = user;
+        res.json({ success: true, user: userWithoutPassword });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -71,7 +96,8 @@ router.get('/me', verifyToken, async (req, res) => {
 // ── GET /api/auth/users (admin only) ─────────────────────────────────────────
 router.get('/users', verifyToken, requireAdmin, async (req, res) => {
     try {
-        const users = await AdminUser.find().select('-password').sort({ created_at: -1 });
+        const data = readData();
+        const users = (data.users || []).map(({ password, ...rest }) => rest);
         res.json({ success: true, users });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -82,7 +108,13 @@ router.get('/users', verifyToken, requireAdmin, async (req, res) => {
 router.patch('/users/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
         const { role, isActive } = req.body;
-        await AdminUser.findByIdAndUpdate(req.params.id, { role, isActive });
+        const data = readData();
+        const user = (data.users || []).find(u => String(u.id || u._id) === String(req.params.id));
+        if (user) {
+            user.role = role !== undefined ? role : user.role;
+            user.isActive = isActive !== undefined ? isActive : user.isActive;
+            writeData(data);
+        }
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });

@@ -27,13 +27,13 @@ const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
-// ── MongoDB Connection ───────────────────────────────────────────────────────
-const MONGO_URI = process.env.MONGO_URI;
-if (!MONGO_URI) { console.error('❌ MONGO_URI missing'); process.exit(1); }
+// ── MongoDB Connection (Removed for local JSON storage) ─────────────────────
+// const MONGO_URI = process.env.MONGO_URI;
+// if (!MONGO_URI) { console.error('❌ MONGO_URI missing'); process.exit(1); }
 
-mongoose.connect(MONGO_URI)
-    .then(() => console.log('✅ MongoDB Connected'))
-    .catch(err => console.error('❌ MongoDB Error:', err));
+// mongoose.connect(MONGO_URI)
+//     .then(() => console.log('✅ MongoDB Connected'))
+//     .catch(err => console.error('❌ MongoDB Error:', err));
 
 // ── AI Init ──────────────────────────────────────────────────────────────────
 console.log(`🧠 AI model: ${modelName}`);
@@ -89,78 +89,111 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
+// ── JSON Helper ──
+const DATA_PATH = path.join(__dirname, 'data.json');
+const readData = () => {
+    try { return JSON.parse(fs.readFileSync(DATA_PATH, 'utf8')); }
+    catch (e) { return { contacts: [], partners: [] }; }
+};
+const writeData = (data) => fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+
 // POST /api/contact
 app.post('/api/contact', async (req, res) => {
     try {
-        const entry = new Contact(req.body);
-        await entry.save();
-        res.json({ success: true, id: entry._id, message: 'Message received! We will contact you within 24 hours.' });
+        const data = readData();
+        const entry = { ...req.body, id: Date.now(), status: 'new', created_at: new Date().toISOString() };
+        data.contacts.push(entry);
+        writeData(data);
+        res.json({ success: true, id: entry.id, message: 'Message received! We will contact you within 24 hours.' });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 // POST /api/partner
 app.post('/api/partner', async (req, res) => {
     try {
-        const entry = new Partner(req.body);
-        await entry.save();
-        res.json({ success: true, id: entry._id, message: 'Application submitted!' });
+        const data = readData();
+        const entry = { ...req.body, id: Date.now(), status: 'pending', created_at: new Date().toISOString() };
+        data.partners.push(entry);
+        writeData(data);
+        res.json({ success: true, id: entry.id, message: 'Application submitted!' });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 // ── Legacy Admin Routes ───────────────────────────────────────────────────────
 app.get('/api/admin/stats', adminAuth, async (req, res) => {
     try {
-        const [totalContacts, newContacts, totalPartners, pendingPartners] = await Promise.all([
-            Contact.countDocuments(), Contact.countDocuments({ status: 'new' }),
-            Partner.countDocuments(), Partner.countDocuments({ status: 'pending' })
-        ]);
-        const today = new Date(); today.setHours(0,0,0,0);
-        const [todayContacts, todayPartners] = await Promise.all([
-            Contact.countDocuments({ created_at: { $gte: today } }),
-            Partner.countDocuments({ created_at: { $gte: today } })
-        ]);
-        res.json({ success: true, stats: { totalContacts, newContacts, totalPartners, pendingPartners, todayContacts, todayPartners } });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        const data = readData();
+        const stats = {
+            totalContacts: data.contacts.length,
+            newContacts: data.contacts.filter(c => c.status === 'new').length,
+            totalPartners: data.partners.length,
+            pendingPartners: data.partners.filter(p => p.status === 'pending').length,
+            todayContacts: data.contacts.filter(c => new Date(c.created_at).toDateString() === new Date().toDateString()).length,
+            todayPartners: data.partners.filter(p => new Date(p.created_at).toDateString() === new Date().toDateString()).length
+        };
+        res.json({ success: true, stats });
+    } catch (err) { 
+        console.error('❌ Stats Error:', err.message);
+        res.status(500).json({ success: false, error: err.message }); 
+    }
 });
 
 app.get('/api/admin/contacts', adminAuth, async (req, res) => {
     try {
-        const data   = await Contact.find().sort({ created_at: -1 });
-        const mapped = data.map(c => ({ ...c._doc, id: c._id }));
-        res.json({ success: true, data: mapped, total: mapped.length });
+        const data = readData();
+        res.json({ success: true, data: data.contacts, total: data.contacts.length });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/admin/partners', adminAuth, async (req, res) => {
     try {
-        const data   = await Partner.find().sort({ created_at: -1 });
-        const mapped = data.map(p => ({ ...p._doc, id: p._id }));
-        res.json({ success: true, data: mapped, total: mapped.length });
+        const data = readData();
+        res.json({ success: true, data: data.partners, total: data.partners.length });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/api/admin/contact/:id/status', adminAuth, async (req, res) => {
-    try { const c = await Contact.findByIdAndUpdate(req.params.id, { status: req.body.status }); res.json({ success: !!c }); }
-    catch (err) { res.status(500).json({ error: err.message }); }
+    try { 
+        const data = readData();
+        const item = data.contacts.find(c => String(c.id) === String(req.params.id));
+        if (item) item.status = req.body.status;
+        writeData(data);
+        res.json({ success: !!item }); 
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/api/admin/partner/:id/status', adminAuth, async (req, res) => {
-    try { const p = await Partner.findByIdAndUpdate(req.params.id, { status: req.body.status }); res.json({ success: !!p }); }
-    catch (err) { res.status(500).json({ error: err.message }); }
+    try { 
+        const data = readData();
+        const item = data.partners.find(p => String(p.id) === String(req.params.id));
+        if (item) item.status = req.body.status;
+        writeData(data);
+        res.json({ success: !!item }); 
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/admin/contact/:id', adminAuth, async (req, res) => {
-    try { const c = await Contact.findByIdAndDelete(req.params.id); res.json({ success: !!c }); }
-    catch (err) { res.status(500).json({ error: err.message }); }
+    try { 
+        const data = readData();
+        const initialLen = data.contacts.length;
+        data.contacts = data.contacts.filter(c => String(c.id) !== String(req.params.id));
+        writeData(data);
+        res.json({ success: data.contacts.length < initialLen }); 
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/admin/partner/:id', adminAuth, async (req, res) => {
-    try { const p = await Partner.findByIdAndDelete(req.params.id); res.json({ success: !!p }); }
-    catch (err) { res.status(500).json({ error: err.message }); }
+    try { 
+        const data = readData();
+        const initialLen = data.partners.length;
+        data.partners = data.partners.filter(p => String(p.id) !== String(req.params.id));
+        writeData(data);
+        res.json({ success: data.partners.length < initialLen }); 
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Static Frontend ───────────────────────────────────────────────────────────
-const distPath = path.join(__dirname, '../frontend/dist');
+const distPath = path.join(__dirname, '../aimall-f/dist');
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
     app.get('*', (req, res, next) => {
@@ -168,11 +201,20 @@ if (fs.existsSync(distPath)) {
         res.sendFile(path.join(distPath, 'index.html'));
     });
 } else {
-    app.use(express.static(path.join(__dirname, '../frontend')));
+    app.use(express.static(path.join(__dirname, '../aimall-f')));
 }
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// ── Global Error Handler ──────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+    console.error('🔥 Global Error:', err.stack);
+    res.status(err.status || 500).json({
+        success: false,
+        error: err.message || 'Internal Server Error'
+    });
+});
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {

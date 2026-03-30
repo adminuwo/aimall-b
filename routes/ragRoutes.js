@@ -1,16 +1,29 @@
 /**
- * RAG Chat Routes — Streaming SSE endpoint + non-streaming fallback
+ * RAG Chat Routes — Streaming SSE endpoint + non-streaming fallback (Using Local Data)
  */
 const express    = require('express');
-const QueryLog   = require('../models/QueryLog');
 const { ragQueryStream } = require('../services/ragService');
 const { fireWebhook }    = require('../services/webhookService');
+const { readData, writeData } = require('../utils/dataStore');
 
 const router = express.Router();
 
+function saveQueryLog(logData) {
+    try {
+        const data = readData();
+        if (!data.queryLogs) data.queryLogs = [];
+        data.queryLogs.push({ ...logData, created_at: new Date().toISOString() });
+        writeData(data);
+    } catch (e) {
+        console.error('❌ Failed to save query log to data.json', e.message);
+    }
+}
+
 // ── POST /api/rag/chat/stream  (SSE streaming) ───────────────────────────────
 router.post('/chat/stream', async (req, res) => {
+    console.log('--- Incoming Chat Request ---');
     const { message, history = [], sessionId = 'anon' } = req.body;
+    console.log(`User: ${message} (Session: ${sessionId})`);
     if (!message) return res.status(400).json({ success: false, error: 'Message required' });
 
     // SSE headers
@@ -37,21 +50,19 @@ router.post('/chat/stream', async (req, res) => {
             res.end();
 
             // Log query
-            try {
-                await QueryLog.create({
-                    sessionId,
-                    userQuery:       message,
-                    language:        meta.language,
-                    ragUsed:         meta.ragUsed,
-                    fallbackUsed:    meta.fallbackUsed,
-                    similarityScore: meta.similarityScore,
-                    docSourceIds:    meta.docSourceIds,
-                    responseText:    meta.fullText.slice(0, 1000),
-                    responseTimeMs:  meta.responseTimeMs,
-                    success:         true,
-                    userIp:          req.ip
-                });
-            } catch (e) { /* non-blocking */ }
+            saveQueryLog({
+                sessionId,
+                userQuery:       message,
+                language:        meta.language,
+                ragUsed:         meta.ragUsed,
+                fallbackUsed:    meta.fallbackUsed,
+                similarityScore: meta.similarityScore,
+                docSourceIds:    meta.docSourceIds,
+                responseText:    meta.fullText.slice(0, 1000),
+                responseTimeMs:  meta.responseTimeMs,
+                success:         true,
+                userIp:          req.ip
+            });
 
             await fireWebhook('query', { sessionId, query: message, ragUsed: meta.ragUsed });
         },
@@ -61,12 +72,11 @@ router.post('/chat/stream', async (req, res) => {
             console.error('❌ RAG stream error:', err.message);
             send({ type: 'error', message: 'Something went wrong. Please try again.' });
             res.end();
-            try {
-                await QueryLog.create({
-                    sessionId, userQuery: message, success: false,
-                    errorMessage: err.message, userIp: req.ip
-                });
-            } catch (e) { /* non-blocking */ }
+
+            saveQueryLog({
+                sessionId, userQuery: message, success: false,
+                errorMessage: err.message, userIp: req.ip
+            });
         }
     );
 });
@@ -88,21 +98,19 @@ router.post('/chat', async (req, res) => {
             );
         });
 
-        try {
-            await QueryLog.create({
-                sessionId,
-                userQuery:       message,
-                language:        meta.language,
-                ragUsed:         meta.ragUsed,
-                fallbackUsed:    meta.fallbackUsed,
-                similarityScore: meta.similarityScore,
-                docSourceIds:    meta.docSourceIds,
-                responseText:    fullResponse.slice(0, 1000),
-                responseTimeMs:  meta.responseTimeMs,
-                success:         true,
-                userIp:          req.ip
-            });
-        } catch (e) { /* non-blocking */ }
+        saveQueryLog({
+            sessionId,
+            userQuery:       message,
+            language:        meta.language,
+            ragUsed:         meta.ragUsed,
+            fallbackUsed:    meta.fallbackUsed,
+            similarityScore: meta.similarityScore,
+            docSourceIds:    meta.docSourceIds,
+            responseText:    fullResponse.slice(0, 1000),
+            responseTimeMs:  meta.responseTimeMs,
+            success:         true,
+            userIp:          req.ip
+        });
 
         res.json({ success: true, answer: fullResponse, ...meta });
     } catch (err) {
