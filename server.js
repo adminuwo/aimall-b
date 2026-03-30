@@ -15,6 +15,17 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const webhookRoutes   = require('./routes/webhookRoutes');
 
 const app  = express();
+// ── Service Status ──
+app.get('/', (req, res) => {
+    res.send(`
+        <div style="font-family:sans-serif; text-align:center; padding-top:100px;">
+            <h1 style="color:#00a2ff;">✅ AI-Mall™ Backend is LIVE</h1>
+            <p style="color:#666;">Core Engine: <b>Gemini 2.5 Flash</b></p>
+            <p style="color:#999;">Status: Operational | Environment: Cloud Run</p>
+        </div>
+    `);
+});
+
 const PORT = process.env.PORT || 8080;
 
 // ── Middleware ───────────────────────────────────────────────────────────────
