@@ -4,18 +4,15 @@
 const express    = require('express');
 const { ragQueryStream } = require('../services/ragService');
 const { fireWebhook }    = require('../services/webhookService');
-const { readData, writeData } = require('../utils/dataStore');
-
 const router = express.Router();
 
-function saveQueryLog(logData) {
+const QueryLog = require('../models/QueryLog');
+
+async function saveQueryLog(logData) {
     try {
-        const data = readData();
-        if (!data.queryLogs) data.queryLogs = [];
-        data.queryLogs.push({ ...logData, created_at: new Date().toISOString() });
-        writeData(data);
+        await QueryLog.create(logData);
     } catch (e) {
-        console.error('❌ Failed to save query log to data.json', e.message);
+        console.error('❌ Failed to save query log to MongoDB', e.message);
     }
 }
 

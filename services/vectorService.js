@@ -80,12 +80,9 @@ async function querySimilar(queryEmbedding, topK = TOP_K) {
         }));
     }
 
-    // ── JSON fallback — no MongoDB needed ──
+    // ── MongoDB fallback ──
     try {
-        if (!fs.existsSync(DATA_PATH)) return [];
-        const content = fs.readFileSync(DATA_PATH, 'utf8');
-        const data = JSON.parse(content);
-        const docs = data.documents || [];
+        const docs = await Document.find({ status: 'processed' });
         const scored = [];
 
         for (const doc of docs) {
@@ -95,8 +92,8 @@ async function querySimilar(queryEmbedding, topK = TOP_K) {
                 const score = cosineSimilarity(queryEmbedding, chunk.embedding);
                 scored.push({
                     content:         chunk.content,
-                    documentId:      doc.id || doc._id,
-                    documentName:    doc.name || doc.originalName,
+                    documentId:      doc._id,
+                    documentName:    doc.originalName,
                     chunkIndex:      chunk.index,
                     similarityScore: score
                 });
@@ -106,7 +103,7 @@ async function querySimilar(queryEmbedding, topK = TOP_K) {
             .sort((a, b) => b.similarityScore - a.similarityScore)
             .slice(0, topK);
     } catch (err) {
-        console.error('❌ JSON RAG error:', err.message);
+        console.error('❌ MongoDB Vector Search error:', err.message);
         return [];
     }
 }

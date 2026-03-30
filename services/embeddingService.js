@@ -24,7 +24,7 @@ async function generateEmbedding(text) {
             model: EMBEDDING_MODEL,
             contents: cleanText,
         });
-        
+
         // The array of values is generally located under response.embeddings[0].values
         if (response.embeddings && response.embeddings[0] && response.embeddings[0].values) {
             return response.embeddings[0].values;
@@ -32,7 +32,7 @@ async function generateEmbedding(text) {
 
         // Just in case the format returns single object directly
         if (response.embedding && response.embedding.values) {
-             return response.embedding.values;
+            return response.embedding.values;
         }
 
         console.log("Could not find embedding vectors in response, using Zero-Vector fallback");
@@ -40,7 +40,7 @@ async function generateEmbedding(text) {
     } catch (err) {
         console.error('❌ Vertex Embedding failed:', err.message);
         console.warn('⚠️ CRITICAL: Using Zero-Vector fallback. Check Cloud AI permissions or API limits.');
-        return new Array(768).fill(0); 
+        return new Array(768).fill(0);
     }
 }
 
@@ -70,7 +70,7 @@ function cosineSimilarity(a, b) {
     if (!a || !b || a.length !== b.length) return 0;
     let dot = 0, normA = 0, normB = 0;
     for (let i = 0; i < a.length; i++) {
-        dot   += a[i] * b[i];
+        dot += a[i] * b[i];
         normA += a[i] * a[i];
         normB += b[i] * b[i];
     }

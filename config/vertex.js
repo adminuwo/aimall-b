@@ -1,5 +1,5 @@
 const { GoogleGenAI } = require('@google/genai');
-require('dotenv').config(); 
+require('dotenv').config();
 const path = require('path');
 const { getFullSystemInstruction } = require('../services/configService.js');
 

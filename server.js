@@ -27,13 +27,13 @@ const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
-// ── MongoDB Connection (Removed for local JSON storage) ─────────────────────
-// const MONGO_URI = process.env.MONGO_URI;
-// if (!MONGO_URI) { console.error('❌ MONGO_URI missing'); process.exit(1); }
+// ── MongoDB Connection ──────────────────────────────────────────────────────
+const MONGO_URI = process.env.MONGO_URI;
+if (!MONGO_URI) { console.error('❌ MONGO_URI missing in .env'); process.exit(1); }
 
-// mongoose.connect(MONGO_URI)
-//     .then(() => console.log('✅ MongoDB Connected'))
-//     .catch(err => console.error('❌ MongoDB Error:', err));
+mongoose.connect(MONGO_URI)
+    .then(() => console.log('✅ MongoDB Connected'))
+    .catch(err => console.error('❌ MongoDB Error:', err));
 
 // ── AI Init ──────────────────────────────────────────────────────────────────
 console.log(`🧠 AI model: ${modelName}`);

@@ -3,7 +3,7 @@
  * Query → Embed → Search → (Re-rank) → LLM → Stream response
  */
 
-const { generateEmbedding }                    = require('./embeddingService');
+const { generateEmbedding } = require('./embeddingService');
 const { querySimilar, reRankResults, SIMILARITY_THRESHOLD } = require('./vectorService');
 const { aiInstance, modelName, getDynamicSystemInstruction } = require('../config/vertex');
 
@@ -25,7 +25,7 @@ function detectQueryLanguage(text) {
  * Build RAG prompt from context chunks
  */
 function buildRAGPrompt(query, chunks, lang) {
-    const context = chunks.map((c, i) => `[Source ${i+1}]: ${c.content}`).join('\n\n');
+    const context = chunks.map((c, i) => `[Source ${i + 1}]: ${c.content}`).join('\n\n');
     const langInstruction = MULTILINGUAL_INSTRUCTION[lang] || MULTILINGUAL_INSTRUCTION.en;
 
     return `You are AI-Mall bot, the AI-Mall Smart Assistant. ${langInstruction}
@@ -77,7 +77,7 @@ async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
         // Step 3: Re-rank
         const results = reRankResults(rawResults, query);
         const topScore = results.length > 0 ? results[0].similarityScore : 0;
-        const ragUsed  = topScore >= SIMILARITY_THRESHOLD;
+        const ragUsed = topScore >= SIMILARITY_THRESHOLD;
 
         console.log(`🔍 RAG: top score=${topScore.toFixed(3)}, threshold=${SIMILARITY_THRESHOLD}, ragUsed=${ragUsed}`);
 
@@ -90,25 +90,23 @@ async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
         // --- RAG SUCCEEDED, CONSTRUCT PROMPT ---
         const topChunks = results.slice(0, 4);
         const prompt = buildRAGPrompt(query, topChunks, lang);
-        
+
         const cleanHistory = (history || []).map(h => ({
-            role: h.role === 'model' ? 'model' : 'user', 
+            role: h.role === 'model' ? 'model' : 'user',
             parts: [{ text: h.parts[0].text || "" }]
         }));
 
         // Step 4: Stream LLM response
-        const chat = aiInstance.chats.create({
+        // Step 4: Stream LLM response
+        console.log(`🧠 Calling Vertex AI model (${modelName}) in RAG mode via @google/genai...`);
+
+        const resultStream = await aiInstance.models.generateContentStream({
             model: modelName,
-            config: {
-                systemInstruction: getDynamicSystemInstruction()
-            },
-            history: cleanHistory.length > 0 ? cleanHistory : undefined
+            contents: [...cleanHistory, { role: 'user', parts: [{ text: prompt }] }],
+            config: { systemInstruction: getDynamicSystemInstruction() }
         });
 
-        console.log(`🧠 Calling AI model (${modelName}) in RAG mode via @google/genai...`);
-        const resultStream = await chat.sendMessageStream({ message: prompt });
         let fullText = '';
-
         for await (const chunk of resultStream) {
             const text = chunk.text || '';
             if (text) {
@@ -122,8 +120,8 @@ async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
             ragUsed: true,
             fallbackUsed: false,
             similarityScore: topScore,
-            responseTimeMs:  elapsed,
-            docSourceIds:    results.slice(0, 4).map(r => r.documentId),
+            responseTimeMs: elapsed,
+            docSourceIds: results.slice(0, 4).map(r => r.documentId),
             fullText,
             language: lang
         });
@@ -141,37 +139,34 @@ async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
 async function fallbackStream(query, history, lang, onChunk, onDone, onError, startTime, ragUsed, topScore) {
     try {
         const prompt = buildFallbackPrompt(query, lang);
-        
+
         // Ensure history formats are strictly clean for the new SDK
         // new SDK expects `{ role: 'user', parts: [{ text: "foo" }] }`
         const cleanHistory = (history || []).map(h => ({
-            role: h.role === 'model' ? 'model' : 'user', 
+            role: h.role === 'model' ? 'model' : 'user',
             parts: [{ text: h.parts[0].text || "" }]
         }));
 
-        console.log(`🧠 Calling AI model (${modelName}) via new @google/genai API...`);
-        const chat = aiInstance.chats.create({
+        console.log(`🧠 Calling Vertex AI model (${modelName}) via fallback @google/genai API...`);
+
+        const resultStream = await aiInstance.models.generateContentStream({
             model: modelName,
-            config: {
-                systemInstruction: getDynamicSystemInstruction()
-            },
-            history: cleanHistory.length > 0 ? cleanHistory : undefined
+            contents: [...cleanHistory, { role: 'user', parts: [{ text: prompt }] }],
+            config: { systemInstruction: getDynamicSystemInstruction() }
         });
 
-        const resultStream = await chat.sendMessageStream({ message: prompt });
         let fullText = '';
-
         for await (const chunk of resultStream) {
             const text = chunk.text || '';
             if (text) { fullText += text; onChunk(text); }
         }
 
         onDone({
-            ragUsed:         ragUsed || false,
-            fallbackUsed:    !ragUsed,
+            ragUsed: ragUsed || false,
+            fallbackUsed: !ragUsed,
             similarityScore: topScore || 0,
-            responseTimeMs:  Date.now() - startTime,
-            docSourceIds:    [],
+            responseTimeMs: Date.now() - startTime,
+            docSourceIds: [],
             fullText,
             language: lang
         });

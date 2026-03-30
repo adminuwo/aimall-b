@@ -39,24 +39,14 @@ const upload = multer({
     }
 });
 
-// ── JSON Helpers ──
-const fs = require('fs');
-const KNOWLEDGE_PATH = path.join(__dirname, '../knowledge.json');
-const readKnowledge = () => {
-    try { return JSON.parse(fs.readFileSync(KNOWLEDGE_PATH, 'utf8')); }
-    catch (e) { return { documents: [] }; }
-};
-const writeKnowledge = (data) => fs.writeFileSync(KNOWLEDGE_PATH, JSON.stringify(data, null, 2));
-
 // ── Background processing function ──────────────────────────────────────────
 async function processDocument(id) {
     try {
-        const data = readKnowledge();
-        const doc = data.documents.find(d => d.id === id);
+        const doc = await Document.findById(id);
         if (!doc) return;
 
         doc.status = 'processing';
-        writeKnowledge(data);
+        await doc.save();
 
         // 1. Extract text
         const text     = await extractText(doc.path, doc.mimeType);
@@ -71,24 +61,18 @@ async function processDocument(id) {
         const embeddings = await generateEmbeddingsBatch(texts);
         chunks.forEach((c, i) => { c.embedding = embeddings[i] || []; });
 
-        // 4. Update knowledge.json
-        const freshData = readKnowledge();
-        const freshDoc = freshData.documents.find(d => d.id === id);
-        if (freshDoc) {
-            freshDoc.status        = 'processed';
-            freshDoc.chunks        = chunks;
-            freshDoc.chunkCount    = chunks.length;
-            freshDoc.language      = language;
-            freshDoc.processed_at  = new Date();
-            writeKnowledge(freshData);
-        }
+        // 4. Update MongoDB
+        doc.status        = 'processed';
+        doc.chunks        = chunks;
+        doc.chunkCount    = chunks.length;
+        doc.language      = language;
+        doc.processed_at  = new Date();
+        await doc.save();
 
-        console.log(`✅ Document processed: ${doc.name} → ${chunks.length} chunks`);
+        console.log(`✅ Document processed: ${doc.originalName} → ${chunks.length} chunks`);
     } catch (err) {
         console.error(`❌ Processing failed for document ${id}:`, err.message);
-        const data = readKnowledge();
-        const doc = data.documents.find(d => d.id === id);
-        if (doc) { doc.status = 'error'; doc.error = err.message; writeKnowledge(data); }
+        await Document.findByIdAndUpdate(id, { status: 'error', error: err.message });
     }
 }
 
@@ -98,28 +82,23 @@ router.post('/upload', verifyToken, requireAdmin, upload.single('document'), asy
 
     try {
         const { url, storageType } = await storeFile(req.file.path, req.file.originalname);
-        const id = uuidv4();
-        const data = readKnowledge();
         
-        const doc = {
-            id,
+        const doc = await Document.create({
             path:         req.file.path,
-            name:         req.file.originalname,
+            originalName: req.file.originalname,
             mimeType:     req.file.mimetype,
             size:         req.file.size,
             url,
             storageType,
             status:       'pending',
             uploadedBy:   req.user.username,
-            createdAt:    new Date().toISOString()
-        };
-        data.documents.push(doc);
-        writeKnowledge(data);
+            createdAt:    new Date()
+        });
 
         // Process asynchronously
-        processDocument(id).catch(console.error);
+        processDocument(doc._id).catch(console.error);
 
-        res.json({ success: true, document: { id, filename: doc.name, status: doc.status } });
+        res.json({ success: true, document: { id: doc._id, filename: doc.originalName, status: doc.status } });
     } catch (err) {
         console.error('❌ Upload Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
@@ -129,22 +108,18 @@ router.post('/upload', verifyToken, requireAdmin, upload.single('document'), asy
 // ── GET /api/documents ────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
     try {
-        if (!fs.existsSync(KNOWLEDGE_PATH)) return res.json({ success: true, data: [], documents: [], total: 0 });
-        const content = fs.readFileSync(KNOWLEDGE_PATH, 'utf8');
-        let data = { documents: [] };
-        try { data = JSON.parse(content); } catch(e) {}
-        
-        const docs = (data.documents || []).map(d => ({
-            _id: d.id || d._id,
-            filename: d.name || d.originalName,
-            status: d.status || 'processed',
+        const docs = await Document.find().sort({ createdAt: -1 });
+        const formatted = docs.map(d => ({
+            _id: d._id,
+            filename: d.originalName,
+            status: d.status,
             chunks: d.chunks || [],
-            createdAt: d.createdAt || new Date(),
-            extension: (d.name || d.originalName || '').split('.').pop(),
+            createdAt: d.createdAt,
+            extension: (d.originalName || '').split('.').pop(),
             publicUrl: d.url || (d.path ? `/uploads/${path.basename(d.path)}` : '#'),
             storagePath: d.path || '#'
         }));
-        res.json({ success: true, data: docs });
+        res.json({ success: true, data: formatted });
     } catch (err) {
         console.error('❌ Document List Error:', err.message);
         res.status(500).json({ success: false, error: err.message, data: [] });
@@ -154,13 +129,9 @@ router.get('/', async (req, res) => {
 // ── GET /api/documents/:id ────────────────────────────────────────────────────
 router.get('/:id', verifyToken, requireViewer, async (req, res) => {
     try {
-        const data = readKnowledge();
-        const doc = data.documents.find(d => String(d.id || d._id) === String(req.params.id));
+        const doc = await Document.findById(req.params.id).select('-chunks');
         if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
-        
-        // Return without chunks array for lightweight response if needed
-        const { chunks, ...docWithoutChunks } = doc;
-        res.json({ success: true, document: docWithoutChunks });
+        res.json({ success: true, document: doc });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -169,12 +140,11 @@ router.get('/:id', verifyToken, requireViewer, async (req, res) => {
 // ── POST /api/documents/:id/reprocess ────────────────────────────────────────
 router.post('/:id/reprocess', verifyToken, requireAdmin, async (req, res) => {
     try {
-        const data = readKnowledge();
-        const doc = data.documents.find(d => String(d.id || d._id) === String(req.params.id));
+        const doc = await Document.findById(req.params.id);
         if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
 
         res.json({ success: true, message: 'Reprocessing started' });
-        processDocument(doc.id || doc._id).catch(console.error);
+        processDocument(doc._id).catch(console.error);
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -183,20 +153,20 @@ router.post('/:id/reprocess', verifyToken, requireAdmin, async (req, res) => {
 // ── DELETE /api/documents/:id ─────────────────────────────────────────────────
 router.delete('/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
-        const data = readKnowledge();
-        const doc = data.documents.find(d => String(d.id || d._id) === String(req.params.id));
+        const doc = await Document.findById(req.params.id);
         if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
 
-        await deleteVectors(doc.id || doc._id, doc.chunkCount);
-        deleteLocalFile(doc.filename || doc.name);
+        await deleteVectors(doc._id, doc.chunkCount);
+        deleteLocalFile(path.basename(doc.path));
         
-        data.documents = data.documents.filter(d => String(d.id || d._id) !== String(req.params.id));
-        writeKnowledge(data);
+        await Document.findByIdAndDelete(req.params.id);
 
         res.json({ success: true, message: 'Document deleted' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
+module.exports = router;
 
 module.exports = router;

@@ -4,17 +4,8 @@
 const express   = require('express');
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
-const fs = require('fs');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const AdminUser = require('../models/AdminUser');
 const { verifyToken, requireAdmin, JWT_SECRET } = require('../middleware/auth');
-
-const DATA_PATH = path.join(__dirname, '../data.json');
-const readData = () => {
-    try { return JSON.parse(fs.readFileSync(DATA_PATH, 'utf8')); }
-    catch (e) { return { users: [] }; }
-};
-const writeData = (data) => fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
 
 const router = express.Router();
 
@@ -24,31 +15,28 @@ router.post('/login', async (req, res) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ success: false, error: 'Username and password required' });
 
-        const data = readData();
-        if (!data.users) data.users = [];
-
-        // Seed default admin if none exists
-        if (data.users.length === 0) {
+        // Seed default admin if none exists in DB
+        const count = await AdminUser.countDocuments();
+        if (count === 0) {
             const hashed = await bcrypt.hash('admin123', 10);
-            data.users.push({ id: uuidv4(), username: 'admin', email: 'admin@aimall.ai', password: hashed, role: 'admin', isActive: true });
-            writeData(data);
-            console.log('🔐 Default admin created: admin / admin123');
+            await AdminUser.create({ username: 'admin', email: 'admin@aimall.ai', password: hashed, role: 'admin', isActive: true });
+            console.log('🔐 Default admin created in MongoDB: admin / admin123');
         }
 
-        const user = data.users.find(u => u.username === username && u.isActive !== false);
-        if (!user) return res.status(401).json({ success: false, error: 'Invalid credentials' });
+        const user = await AdminUser.findOne({ username, isActive: true });
+        if (!user) return res.status(401).json({ success: false, error: 'Invalid credentials or account disabled' });
 
         const valid = await bcrypt.compare(password, user.password);
         if (!valid) return res.status(401).json({ success: false, error: 'Invalid credentials' });
 
         const token = jwt.sign(
-            { userId: user.id || user._id, username: user.username, role: user.role },
+            { userId: user._id, username: user.username, role: user.role },
             JWT_SECRET,
             { expiresIn: '24h' }
         );
 
-        user.lastLogin = new Date().toISOString();
-        writeData(data);
+        user.lastLogin = new Date();
+        await user.save();
 
         res.json({ success: true, token, user: { username: user.username, role: user.role, email: user.email } });
     } catch (err) {
@@ -62,19 +50,15 @@ router.post('/register', verifyToken, requireAdmin, async (req, res) => {
         const { username, email, password, role } = req.body;
         if (!username || !email || !password) return res.status(400).json({ success: false, error: 'All fields required' });
 
-        const data = readData();
-        if (!data.users) data.users = [];
-
-        if (data.users.find(u => u.username === username || u.email === email)) {
+        const existing = await AdminUser.findOne({ $or: [{ username }, { email }] });
+        if (existing) {
             return res.status(409).json({ success: false, error: 'Username or email already exists' });
         }
 
         const hashed = await bcrypt.hash(password, 10);
-        const user = { id: uuidv4(), username, email, password: hashed, role: role || 'viewer', isActive: true };
-        data.users.push(user);
-        writeData(data);
+        const user = await AdminUser.create({ username, email, password: hashed, role: role || 'viewer', isActive: true });
 
-        res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
+        res.json({ success: true, user: { id: user._id, username: user.username, role: user.role } });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -83,11 +67,9 @@ router.post('/register', verifyToken, requireAdmin, async (req, res) => {
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 router.get('/me', verifyToken, async (req, res) => {
     try {
-        const data = readData();
-        const user = (data.users || []).find(u => String(u.id || u._id) === String(req.user.userId));
+        const user = await AdminUser.findById(req.user.userId).select('-password');
         if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-        const { password, ...userWithoutPassword } = user;
-        res.json({ success: true, user: userWithoutPassword });
+        res.json({ success: true, user });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -96,8 +78,7 @@ router.get('/me', verifyToken, async (req, res) => {
 // ── GET /api/auth/users (admin only) ─────────────────────────────────────────
 router.get('/users', verifyToken, requireAdmin, async (req, res) => {
     try {
-        const data = readData();
-        const users = (data.users || []).map(({ password, ...rest }) => rest);
+        const users = await AdminUser.find().select('-password');
         res.json({ success: true, users });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -108,13 +89,10 @@ router.get('/users', verifyToken, requireAdmin, async (req, res) => {
 router.patch('/users/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
         const { role, isActive } = req.body;
-        const data = readData();
-        const user = (data.users || []).find(u => String(u.id || u._id) === String(req.params.id));
-        if (user) {
-            user.role = role !== undefined ? role : user.role;
-            user.isActive = isActive !== undefined ? isActive : user.isActive;
-            writeData(data);
-        }
+        await AdminUser.findByIdAndUpdate(req.params.id, { 
+            ...(role !== undefined && { role }), 
+            ...(isActive !== undefined && { isActive }) 
+        });
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
