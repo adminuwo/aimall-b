@@ -5,7 +5,7 @@ const mongoose   = require('mongoose');
 const path       = require('path');
 const fs         = require('fs');
 
-const { generativeModel, modelName } = require('./config/vertex');
+const { aiInstance, modelName } = require('./config/vertex');
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 const authRoutes      = require('./routes/authRoutes');
@@ -15,7 +15,7 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const webhookRoutes   = require('./routes/webhookRoutes');
 
 const app  = express();
-const PORT = process.env.PORT || 3003;
+const PORT = process.env.PORT || 8080;
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors({ origin: '*', methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'] }));
@@ -79,11 +79,19 @@ app.use('/api/webhooks',   webhookRoutes);
 app.post('/api/chat', async (req, res) => {
     try {
         const { message, history } = req.body;
-        if (!generativeModel) return res.status(500).json({ error: 'AI not initialized' });
-        const chat   = generativeModel.startChat({ history: history || [], generationConfig: { maxOutputTokens: 1024, temperature: 0.7 } });
-        const result = await chat.sendMessage(message);
-        const text   = result.response.text();
-        res.json({ success: true, answer: text });
+        if (!aiInstance) return res.status(500).json({ error: 'AI not initialized' });
+
+        const cleanHistory = (history || []).map(h => ({
+            role: h.role === 'model' ? 'model' : 'user',
+            parts: [{ text: h.parts[0].text || h.text || "" }]
+        }));
+
+        const result = await aiInstance.models.generateContent({
+            model: modelName,
+            contents: [...cleanHistory, { role: 'user', parts: [{ text: message }] }]
+        });
+
+        res.json({ success: true, answer: result.text });
     } catch (err) {
         res.status(500).json({ success: false, error: 'AI error', details: err.message });
     }
