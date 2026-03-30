@@ -86,7 +86,7 @@ app.use('/api/webhooks',   webhookRoutes);
 // LEGACY PUBLIC API ROUTES (kept intact)
 // ════════════════════════════════════════════════════════════════════════════
 
-// POST /api/chat — legacy AISA chatbot (also uses AI model)
+// POST /api/chat — legacy AISA chatbot (Converted to Streaming SSE)
 app.post('/api/chat', async (req, res) => {
     try {
         const { message, history } = req.body;
@@ -94,17 +94,33 @@ app.post('/api/chat', async (req, res) => {
 
         const cleanHistory = (history || []).map(h => ({
             role: h.role === 'model' ? 'model' : 'user',
-            parts: [{ text: h.parts[0].text || h.text || "" }]
+            parts: [{ text: h.parts ? (h.parts[0].text || "") : (h.text || "") }]
         }));
 
-        const result = await aiInstance.models.generateContent({
+        // SSE headers for Cloud Run compatibility
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders();
+
+        const result = await aiInstance.models.generateContentStream({
             model: modelName,
             contents: [...cleanHistory, { role: 'user', parts: [{ text: message }] }]
         });
 
-        res.json({ success: true, answer: result.text });
+        let fullText = "";
+        for await (const chunk of result.stream) {
+            const chunkText = chunk.text();
+            fullText += chunkText;
+            res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunkText })}\n\n`);
+        }
+        res.write(`data: ${JSON.stringify({ type: 'done', fullText })}\n\n`);
+        res.end();
     } catch (err) {
-        res.status(500).json({ success: false, error: 'AI error', details: err.message });
+        console.error('Legacy AI Error:', err.message);
+        res.status(500).write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+        res.end();
     }
 });
 
