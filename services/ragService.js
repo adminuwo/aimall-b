@@ -6,6 +6,7 @@
 const { generateEmbedding } = require('./embeddingService');
 const { querySimilar, reRankResults, SIMILARITY_THRESHOLD } = require('./vectorService');
 const { aiInstance, modelName, getDynamicSystemInstruction } = require('../config/vertex');
+const { enforceBranding } = require('../utils/brandEnforcer');
 
 const MULTILINGUAL_INSTRUCTION = {
     hi: 'कृपया हिंदी में उत्तर दें।',
@@ -28,7 +29,7 @@ function buildRAGPrompt(query, chunks, lang) {
     const context = chunks.map((c, i) => `[Source ${i + 1}]: ${c.content}`).join('\n\n');
     const langInstruction = MULTILINGUAL_INSTRUCTION[lang] || MULTILINGUAL_INSTRUCTION.en;
 
-    return `You are AI-Mall bot, the AI-Mall Smart Assistant. ${langInstruction}
+    return `You are AI-Mall™ bot, the AI-Mall™ Smart Assistant. Always write AI-Mall™, A-Series™, and AISA™ with the ™ symbol. ${langInstruction}
 
 Use ONLY the following knowledge base context to answer the user's question. 
 If the context doesn't contain enough information, say so clearly.
@@ -47,7 +48,7 @@ Answer based strictly on the context above. Be concise, accurate, and helpful.`;
  */
 function buildFallbackPrompt(query, lang) {
     const langInstruction = MULTILINGUAL_INSTRUCTION[lang] || MULTILINGUAL_INSTRUCTION.en;
-    return `You are AI-Mall bot, the AI-Mall Smart Assistant. ${langInstruction}
+    return `You are AI-Mall™ bot, the AI-Mall™ Smart Assistant. Always write AI-Mall™, A-Series™, and AISA™ with the ™ symbol. ${langInstruction}
 Answer this question using your general knowledge about AI, technology, and business solutions (Answer directly as the context from RAG was insufficient): ${query}`;
 }
 
@@ -110,8 +111,9 @@ async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
         for await (const chunk of resultStream) {
             const text = chunk.text || '';
             if (text) {
-                fullText += text;
-                onChunk(text);
+                const cleanedText = enforceBranding(text);
+                fullText += cleanedText;
+                onChunk(cleanedText);
             }
         }
 
@@ -158,7 +160,11 @@ async function fallbackStream(query, history, lang, onChunk, onDone, onError, st
         let fullText = '';
         for await (const chunk of resultStream) {
             const text = chunk.text || '';
-            if (text) { fullText += text; onChunk(text); }
+            if (text) { 
+                const cleanedText = enforceBranding(text);
+                fullText += cleanedText; 
+                onChunk(cleanedText); 
+            }
         }
 
         onDone({
