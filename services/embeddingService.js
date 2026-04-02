@@ -6,7 +6,7 @@
 const { aiInstance } = require('../config/vertex');
 
 const EMBEDDING_MODEL = 'text-embedding-004';
-const SIMILARITY_THRESHOLD = parseFloat(process.env.RAG_THRESHOLD || '0.70');
+const SIMILARITY_THRESHOLD = parseFloat(process.env.RAG_THRESHOLD || '0.62');
 
 /**
  * Generate embedding vector for a single text string
@@ -20,26 +20,29 @@ async function generateEmbedding(text) {
     const cleanText = text.slice(0, 30000).replace(/\r?\n|\r/g, " ");
 
     try {
+        console.log(`📡 Generating embedding for: "${text.slice(0, 30)}..."`);
         const response = await aiInstance.models.embedContent({
             model: EMBEDDING_MODEL,
-            contents: cleanText,
+            contents: [{ parts: [{ text: cleanText }] }],
         });
 
-        // The array of values is generally located under response.embeddings[0].values
-        if (response.embeddings && response.embeddings[0] && response.embeddings[0].values) {
-            return response.embeddings[0].values;
-        }
-
-        // Just in case the format returns single object directly
-        if (response.embedding && response.embedding.values) {
+        // 🟢 Handle standard GenAI/Vertex response structure
+        if (response?.embedding?.values) {
             return response.embedding.values;
         }
 
-        console.log("Could not find embedding vectors in response, using Zero-Vector fallback");
+        // 🟠 Handle batch/array response
+        if (response?.embeddings && response.embeddings[0]?.values) {
+            return response.embeddings[0].values;
+        }
+
+        // 🔴 Catch-all for other SDK variants
+        if (response?.values) return response.values;
+
+        console.error("❌ Invalid embedding response format:", JSON.stringify(response).slice(0, 200));
         return new Array(768).fill(0);
     } catch (err) {
         console.error('❌ Vertex Embedding failed:', err.message);
-        console.warn('⚠️ CRITICAL: Using Zero-Vector fallback. Check Cloud AI permissions or API limits.');
         return new Array(768).fill(0);
     }
 }

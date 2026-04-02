@@ -12,6 +12,7 @@ const DocumentSchema = new mongoose.Schema({
     originalName:    { type: String, required: true },
     mimeType:        { type: String, required: true },
     fileSize:        { type: Number, required: true },
+    path:            { type: String, default: '' },       // Local absolute path for processing
     storageUrl:      { type: String, default: '' },       // GCS URL or local path
     storageType:     { type: String, enum: ['local', 'gcs'], default: 'local' },
     status:          { type: String, enum: ['pending', 'processing', 'processed', 'error'], default: 'pending' },

@@ -8,48 +8,45 @@ const { querySimilar, reRankResults, SIMILARITY_THRESHOLD } = require('./vectorS
 const { aiInstance, modelName, getDynamicSystemInstruction } = require('../config/vertex');
 const { enforceBranding } = require('../utils/brandEnforcer');
 
-const MULTILINGUAL_INSTRUCTION = {
-    hi: 'कृपया हिंदी में उत्तर दें।',
-    en: 'Respond in English.',
-    mixed: 'Respond in the same language as the question.'
-};
-
-/**
- * Detect if query is predominantly Hindi
- */
-function detectQueryLanguage(text) {
-    const hindiChars = (text.match(/[\u0900-\u097F]/g) || []).length;
-    return hindiChars > text.length * 0.2 ? 'hi' : 'en';
-}
+const UNIVERSAL_LANG_INSTRUCTION = "Always respond in the same language as the user's question (e.g., if asked in Hindi, respond in Hindi; if in Spanish, respond in Spanish, etc.).";
 
 /**
  * Build RAG prompt from context chunks
  */
-function buildRAGPrompt(query, chunks, lang) {
+function buildRAGPrompt(query, chunks) {
     const context = chunks.map((c, i) => `[Source ${i + 1}]: ${c.content}`).join('\n\n');
-    const langInstruction = MULTILINGUAL_INSTRUCTION[lang] || MULTILINGUAL_INSTRUCTION.en;
 
-    return `You are AI-Mall™ bot, the AI-Mall™ Smart Assistant. Always write AI-Mall™, A-Series™, and AISA™ with the ™ symbol. ${langInstruction}
+    return `You are AI-Mall™ Bot, a highly intelligent Smart Assistant. 
+Always use AI-Mall™, A-Series™, and AISA™ with the ™ symbol.
+${UNIVERSAL_LANG_INSTRUCTION}
 
-Use ONLY the following knowledge base context to answer the user's question. 
-If the context doesn't contain enough information, say so clearly.
+You have been provided with exclusive context from the AI-Mall™ internal knowledge base. 
+Use this context as your primary source of truth. Try to answer the user's question as accurately as possible. 
 
 === KNOWLEDGE BASE CONTEXT ===
 ${context}
 ==============================
 
-User Question: ${query}
+User's Question: ${query}
 
-Answer based strictly on the context above. Be concise, accurate, and helpful.`;
+Guidelines:
+- If document details exist, prioritize them above general knowledge.
+- Be professional, conversational, and direct.
+- Maintain the AI-Mall™ brand voice throughout.`;
 }
 
 /**
  * Build fallback prompt (no RAG context)
  */
-function buildFallbackPrompt(query, lang) {
-    const langInstruction = MULTILINGUAL_INSTRUCTION[lang] || MULTILINGUAL_INSTRUCTION.en;
-    return `You are AI-Mall™ bot, the AI-Mall™ Smart Assistant. Always write AI-Mall™, A-Series™, and AISA™ with the ™ symbol. ${langInstruction}
-Answer this question using your general knowledge about AI, technology, and business solutions (Answer directly as the context from RAG was insufficient): ${query}`;
+function buildFallbackPrompt(query, hintChunks = []) {
+    let hintText = "";
+    if (hintChunks && hintChunks.length > 0) {
+        hintText = `\n\n=== RELEVANT HINTS FROM KNOWLEDGE BASE ===\n` + 
+                   hintChunks.map((c, i) => `Hint ${i+1}: ${c.content}`).join('\n') +
+                   `=========================================\n\nUse the hints above to guide your answer if they are relevant.`;
+    }
+    return `You are AI-Mall™ Bot, a highly intelligent Smart Assistant. Always use AI-Mall™, A-Series™, and AISA™ with the ™ symbol. ${UNIVERSAL_LANG_INSTRUCTION}${hintText}
+User's Question: ${query}`;
 }
 
 /**
@@ -57,8 +54,7 @@ Answer this question using your general knowledge about AI, technology, and busi
  */
 async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
     const startTime = Date.now();
-    const lang = detectQueryLanguage(query);
-    console.log(`🤖 Processing RAG Query: "${query}" (Language: ${lang})`);
+    console.log(`🤖 Processing RAG Query: "${query}" (Multi-language mode)`);
 
     try {
         // Step 1: Embed query
@@ -68,36 +64,39 @@ async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
             console.log('✅ Query embedding generated');
         } catch (e) {
             console.warn('⚠️ Embedding failed, using fallback LLM:', e.message);
-            return await fallbackStream(query, history, lang, onChunk, onDone, onError, startTime, false, 0);
+            return await fallbackStream(query, history, onChunk, onDone, onError, startTime, false, 0);
         }
 
-        // Step 2: Search vector DB
+        // --- VECTOR SEARCH ---
         const rawResults = await querySimilar(queryEmbedding);
-        console.log(`🔍 Vector search found ${rawResults.length} initial results`);
+        console.log(`🔍 Vector Search found ${rawResults.length} raw results.`);
 
-        // Step 3: Re-rank
         const results = reRankResults(rawResults, query);
         const topScore = results.length > 0 ? results[0].similarityScore : 0;
         const ragUsed = topScore >= SIMILARITY_THRESHOLD;
 
-        console.log(`🔍 RAG: top score=${topScore.toFixed(3)}, threshold=${SIMILARITY_THRESHOLD}, ragUsed=${ragUsed}`);
+        console.log(`📊 Top Score: ${(topScore * 100).toFixed(1)}% | Threshold: ${(SIMILARITY_THRESHOLD * 100).toFixed(1)}% | RAG Hit: ${ragUsed}`);
+        
+        if (results.length > 0) {
+            console.log(`📝 Best Match Preview: "${results[0].content.slice(0, 100)}..."`);
+        }
 
-        // If RAG score isn't met, let's pass to fallback directly
+        // If RAG score isn't met, let's pass to fallback with 'best-effort' context
         if (!ragUsed) {
-            console.log(`⚠️ Low RAG score (${topScore.toFixed(3)}), redirecting to standard fallback AI`);
-            return await fallbackStream(query, history, lang, onChunk, onDone, onError, startTime, false, topScore);
+            console.log(`⚠️ Low RAG score (${topScore.toFixed(3)}), redirecting to fallback with hints.`);
+            const bestEffortHints = results.slice(0, 4); // Still give some context
+            return await fallbackStream(query, history, onChunk, onDone, onError, startTime, false, topScore, bestEffortHints);
         }
 
         // --- RAG SUCCEEDED, CONSTRUCT PROMPT ---
-        const topChunks = results.slice(0, 4);
-        const prompt = buildRAGPrompt(query, topChunks, lang);
+        const topChunks = results.slice(0, 6);
+        const prompt = buildRAGPrompt(query, topChunks);
 
         const cleanHistory = (history || []).map(h => ({
             role: h.role === 'model' ? 'model' : 'user',
             parts: [{ text: h.parts[0].text || "" }]
         }));
 
-        // Step 4: Stream LLM response
         // Step 4: Stream LLM response
         console.log(`🧠 Calling Vertex AI model (${modelName}) in RAG mode via @google/genai...`);
 
@@ -123,27 +122,24 @@ async function ragQueryStream(query, history = [], onChunk, onDone, onError) {
             fallbackUsed: false,
             similarityScore: topScore,
             responseTimeMs: elapsed,
-            docSourceIds: results.slice(0, 4).map(r => r.documentId),
-            fullText,
-            language: lang
+            docSourceIds: results.slice(0, 6).map(r => r.documentId),
+            fullText
         });
 
     } catch (err) {
         console.error('❌ RAG Pipeline Error:', err.message);
         // Fallback gracefully on catastrophic pipeline errs
-        await fallbackStream(query, history, lang, onChunk, onDone, onError, startTime, false, 0);
+        await fallbackStream(query, history, onChunk, onDone, onError, startTime, false, 0, []);
     }
 }
 
 /**
  * Fallback: plain Vertex/Gemini LLM with streaming 
  */
-async function fallbackStream(query, history, lang, onChunk, onDone, onError, startTime, ragUsed, topScore) {
+async function fallbackStream(query, history, onChunk, onDone, onError, startTime, ragUsed, topScore, hintChunks = []) {
     try {
-        const prompt = buildFallbackPrompt(query, lang);
+        const prompt = buildFallbackPrompt(query, hintChunks);
 
-        // Ensure history formats are strictly clean for the new SDK
-        // new SDK expects `{ role: 'user', parts: [{ text: "foo" }] }`
         const cleanHistory = (history || []).map(h => ({
             role: h.role === 'model' ? 'model' : 'user',
             parts: [{ text: h.parts[0].text || "" }]
@@ -172,9 +168,8 @@ async function fallbackStream(query, history, lang, onChunk, onDone, onError, st
             fallbackUsed: !ragUsed,
             similarityScore: topScore || 0,
             responseTimeMs: Date.now() - startTime,
-            docSourceIds: [],
-            fullText,
-            language: lang
+            docSourceIds: (hintChunks || []).map(r => r.documentId),
+            fullText
         });
     } catch (err) {
         console.error('❌ Fallback Stream Error:', err.message);

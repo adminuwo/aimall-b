@@ -59,9 +59,9 @@ function chunkText(text, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP) {
     const words  = text.split(/\s+/).filter(w => w.length > 0);
     const chunks = [];
 
-    for (let i = 0; i < words.length; i += (chunkSize - overlap)) {
-        const chunkWords = words.slice(i, i + chunkSize);
-        if (chunkWords.length < 10) break;  // skip tiny trailing snippets
+    for (let i = 0; ; i += (chunkSize - overlap)) {
+        const chunkWords = words.slice(i, Math.min(i + chunkSize, words.length));
+        if (chunkWords.length === 0) break;
 
         chunks.push({
             index:      chunks.length,

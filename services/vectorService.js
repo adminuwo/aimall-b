@@ -7,7 +7,7 @@
 const { cosineSimilarity, SIMILARITY_THRESHOLD } = require('./embeddingService');
 const Document = require('../models/Document');
 
-const TOP_K = parseInt(process.env.RAG_TOP_K || '5');
+const TOP_K = parseInt(process.env.RAG_TOP_K || '10');
 
 // ── Pinecone Client (optional) ──────────────────────────────────────────────
 let pineconeIndex = null;

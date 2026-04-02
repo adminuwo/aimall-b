@@ -84,15 +84,16 @@ router.post('/upload', verifyToken, requireAdmin, upload.single('document'), asy
         const { url, storageType } = await storeFile(req.file.path, req.file.originalname);
         
         const doc = await Document.create({
-            path:         req.file.path,
+            filename:     req.file.filename,
             originalName: req.file.originalname,
             mimeType:     req.file.mimetype,
-            size:         req.file.size,
-            url,
+            fileSize:     req.file.size,
+            path:         req.file.path,
+            storageUrl:   url,
             storageType,
             status:       'pending',
             uploadedBy:   req.user.username,
-            createdAt:    new Date()
+            created_at:    new Date()
         });
 
         // Process asynchronously
@@ -108,13 +109,13 @@ router.post('/upload', verifyToken, requireAdmin, upload.single('document'), asy
 // ── GET /api/documents ────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
     try {
-        const docs = await Document.find().sort({ createdAt: -1 });
+        const docs = await Document.find().sort({ created_at: -1 });
         const formatted = docs.map(d => ({
             _id: d._id,
             filename: d.originalName,
             status: d.status,
             chunks: d.chunks || [],
-            createdAt: d.createdAt,
+            created_at: d.created_at,
             extension: (d.originalName || '').split('.').pop(),
             publicUrl: d.url || (d.path ? `/uploads/${path.basename(d.path)}` : '#'),
             storagePath: d.path || '#'
